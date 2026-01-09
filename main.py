@@ -1,9 +1,7 @@
 import os
 import re
 import time
-import smtplib
 import httpx
-from email.message import EmailMessage
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 
@@ -30,13 +28,11 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "Eres un asistente útil. Responde en
 CLICK_TO_CALL = os.getenv("CLICK_TO_CALL", "")
 
 # -------------------------
-# ENV - Email Lead Notify (SMTP)
+# CONTACTO OFICIAL (FIJO EN CÓDIGO, REAL)
 # -------------------------
-LEAD_NOTIFY_EMAIL = os.getenv("LEAD_NOTIFY_EMAIL", "")
-SMTP_HOST = os.getenv("SMTP_HOST", "")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASS = os.getenv("SMTP_PASS", "")
+NUXWAY_PHONE_MOBILE = "(+591) 617 86583"
+NUXWAY_PHONE_LANDLINE = "(+591) 4 483862"
+NUXWAY_EMAIL_SALES = "ventas@nuxway.net"
 
 # -------------------------
 # Helpers: regex y keywords
@@ -55,7 +51,7 @@ PRICE_KEYWORDS = [
 
 # -------------------------
 # Estado en memoria por wa_id
-# En producción lo ideal es Redis/DB. Por ahora sirve.
+# (OJO: se pierde si Render reinicia. Luego lo pasamos a Sheets/DB)
 # -------------------------
 LEADS = {}  # wa_id -> dict
 
@@ -135,7 +131,6 @@ def get_lead(wa_id: str) -> dict:
             "name": None,
             "city": None,
             "last_intent": None,
-            "email_sent": False,  # <- para NO enviar emails repetidos
         }
     return LEADS[wa_id]
 
@@ -155,41 +150,37 @@ def lead_log(lead: dict, reason: str = ""):
     )
 
 
-def send_lead_email(lead: dict, last_user_message: str = ""):
-    """
-    Envía un email cuando hay un lead (teléfono/email) y el usuario pidió humano/cotización.
-    """
-    if not (LEAD_NOTIFY_EMAIL and SMTP_HOST and SMTP_USER and SMTP_PASS):
-        print("⚠️ Email no configurado: faltan variables SMTP/LEAD_NOTIFY_EMAIL")
-        return
-
-    subject = f"Nuevo lead WhatsApp - {lead.get('wa_id')}"
-    body = (
-        "Nuevo lead capturado desde WhatsApp\n\n"
-        f"wa_id: {lead.get('wa_id')}\n"
-        f"Teléfono: {lead.get('phone')}\n"
-        f"Email: {lead.get('email')}\n"
-        f"Nombre: {lead.get('name')}\n"
-        f"Ciudad: {lead.get('city')}\n"
-        f"Human requested: {lead.get('human_requested')}\n"
-        f"Último mensaje del cliente: {last_user_message}\n"
+def contact_block() -> str:
+    # Bloque estándar de contacto real
+    return (
+        "📞 Contacto Nuxway:\n"
+        f"• Móvil: {NUXWAY_PHONE_MOBILE}\n"
+        f"• Fijo: {NUXWAY_PHONE_LANDLINE}\n"
+        f"📧 Email: {NUXWAY_EMAIL_SALES}"
     )
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = SMTP_USER
-    msg["To"] = LEAD_NOTIFY_EMAIL
-    msg.set_content(body)
 
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.send_message(msg)
-        print("📧 Lead enviado por email a:", LEAD_NOTIFY_EMAIL)
-    except Exception as e:
-        print("❌ Error enviando email:", str(e))
+def build_handoff_message(lead: dict) -> str:
+    # Mensaje cuando piden humano/asesor
+    if lead.get("phone") or lead.get("email"):
+        parts = ["Perfecto ✅ Ya tengo tus datos."]
+        if CLICK_TO_CALL:
+            parts.append(f"📲 Llamada con asesor (Click to Call):\n{CLICK_TO_CALL}")
+        parts.append(contact_block())
+        parts.append("En breve un asesor se comunicará contigo. ¿En qué ciudad estás?")
+        return "\n\n".join(parts)
+
+    msg = (
+        "Perfecto ✅ Un asesor puede ayudarte.\n"
+        "Por favor compárteme:\n"
+        "• Nombre\n"
+        "• Ciudad\n"
+        "• Teléfono o email\n"
+    )
+    if CLICK_TO_CALL:
+        msg += f"\n📲 Llamada con asesor (Click to Call):\n{CLICK_TO_CALL}\n"
+    msg += f"\n{contact_block()}"
+    return msg
 
 
 async def ask_openai(user_text: str, lead: dict) -> str:
@@ -201,10 +192,8 @@ async def ask_openai(user_text: str, lead: dict) -> str:
 
     internal_context = (
         f"Contexto interno (no lo muestres): wa_id={lead.get('wa_id')}, "
-        f"phone={lead.get('phone')}, email={lead.get('email')}, "
-        f"human_requested={lead.get('human_requested')}, "
-        f"click_to_call={CLICK_TO_CALL or 'NO_DISPONIBLE'}.\n"
-        "Regla: si phone/email ya existen, NO los vuelvas a pedir; solo confirma y avanza."
+        f"phone={lead.get('phone')}, email={lead.get('email')}, human_requested={lead.get('human_requested')}.\n"
+        "Regla: si phone/email ya existen, NO los vuelvas a pedir; confirma y avanza."
     )
 
     payload = {
@@ -229,27 +218,6 @@ async def ask_openai(user_text: str, lead: dict) -> str:
     out = (data["choices"][0]["message"]["content"] or "").strip()
     print("🤖 OpenAI output:", out[:400])
     return out or "¿Me das un poco más de detalle?"
-
-
-def build_handoff_message(lead: dict) -> str:
-    # Si ya tenemos teléfono o email, confirmamos y cerramos
-    if lead.get("phone") or lead.get("email"):
-        parts = ["Perfecto ✅ Ya tengo tus datos."]
-        if CLICK_TO_CALL:
-            parts.append(f"Si deseas hablar ahora con un asesor, puedes llamar aquí:\n{CLICK_TO_CALL}")
-        parts.append("En breve un asesor se comunicará contigo. ¿En qué ciudad estás?")
-        return "\n".join(parts)
-
-    msg = (
-        "Perfecto ✅ Un asesor puede ayudarte.\n"
-        "Por favor compárteme:\n"
-        "• Nombre\n"
-        "• Ciudad\n"
-        "• Teléfono o email\n"
-    )
-    if CLICK_TO_CALL:
-        msg += f"\nTambién puedes llamar aquí:\n{CLICK_TO_CALL}"
-    return msg
 
 
 @app.post("/webhook")
@@ -282,63 +250,45 @@ async def receive_webhook(request: Request):
         text_in = (msg.get("text", {}) or {}).get("body", "") or ""
         print(f"👤 From wa_id={from_number} text={text_in!r}")
 
-        # 1) Capturar teléfono/email si vienen en el mensaje
+        # Capturar teléfono/email si vienen en el mensaje
         phone, email = extract_phone_email(text_in)
         if phone and not lead.get("phone"):
             lead["phone"] = phone
         if email and not lead.get("email"):
             lead["email"] = email
 
-        # 2) Si el usuario pide humano/asesor → activar modo handoff
+        # Si pide humano/asesor
         if wants_human(text_in):
             lead["human_requested"] = True
             lead["last_intent"] = "human"
             lead_log(lead, reason="user_requested_human")
-
-            # Si ya hay datos y aún no se envió email, lo enviamos
-            lead_ready = (lead.get("phone") or lead.get("email"))
-            if lead_ready and not lead.get("email_sent"):
-                send_lead_email(lead, last_user_message=text_in)
-                lead["email_sent"] = True
-
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
 
-        # 3) Si detecta intención de precio/cotización: pedir datos mínimos y marcar intención
+        # Si ya está en modo humano y manda datos
+        if lead.get("human_requested") and (phone or email):
+            lead_log(lead, reason="lead_data_received_after_handoff")
+            await send_whatsapp_text(from_number, build_handoff_message(lead))
+            return {"status": "ok"}
+
+        # Si pide precio/cotización: pedir datos mínimos y ofrecer contacto
         if is_price_intent(text_in):
             lead["last_intent"] = "price"
             lead_log(lead, reason="price_intent")
-
-            # Si ya hay datos y aún no se envió email, lo enviamos
-            lead_ready = (lead.get("phone") or lead.get("email"))
-            if lead_ready and not lead.get("email_sent"):
-                send_lead_email(lead, last_user_message=text_in)
-                lead["email_sent"] = True
-
             reply = (
                 "Claro ✅ Para cotizar correctamente necesito 3 datos:\n"
                 "• Modelo exacto (o qué estás buscando)\n"
                 "• Cantidad de usuarios/extensiones (o capacidad)\n"
                 "• Ciudad (para instalación/envío)\n\n"
-                "Si quieres, también puedes dejar tu email y te envío la proforma."
+                "Si deseas, también puedes dejar tu email y te envío la proforma."
             )
             if CLICK_TO_CALL:
-                reply += f"\n\nSi deseas hablar ahora con un asesor:\n{CLICK_TO_CALL}"
+                reply += f"\n\n📲 Llamada con asesor (Click to Call):\n{CLICK_TO_CALL}"
+            reply += f"\n\n{contact_block()}"
             await send_whatsapp_text(from_number, reply)
             return {"status": "ok"}
 
-        # 4) Si ya está en modo humano y manda datos → agradecer, enviar email (una sola vez) y no repetir
-        if lead.get("human_requested") and (phone or email):
-            lead_log(lead, reason="lead_data_received_after_handoff")
-
-            if not lead.get("email_sent"):
-                send_lead_email(lead, last_user_message=text_in)
-                lead["email_sent"] = True
-
-            await send_whatsapp_text(from_number, build_handoff_message(lead))
-            return {"status": "ok"}
-
-        # 5) Respuesta normal con OpenAI
+        # Respuesta normal con OpenAI
         reply = await ask_openai(text_in, lead)
         await send_whatsapp_text(from_number, reply)
 
