@@ -1,25 +1,42 @@
 import os
 import re
 import time
+import smtplib
 import httpx
+from email.message import EmailMessage
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 
 app = FastAPI()
 
 # -------------------------
-# ENV
+# ENV - WhatsApp
 # -------------------------
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
 WPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
 PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 GRAPH_VERSION = os.getenv("META_GRAPH_VERSION", "v24.0")
 
+# -------------------------
+# ENV - OpenAI
+# -------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "Eres un asistente útil. Responde en español.")
 
+# -------------------------
+# ENV - Click to Call
+# -------------------------
 CLICK_TO_CALL = os.getenv("CLICK_TO_CALL", "")
+
+# -------------------------
+# ENV - Email Lead Notify (SMTP)
+# -------------------------
+LEAD_NOTIFY_EMAIL = os.getenv("LEAD_NOTIFY_EMAIL", "")
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
 
 # -------------------------
 # Helpers: regex y keywords
@@ -38,8 +55,7 @@ PRICE_KEYWORDS = [
 
 # -------------------------
 # Estado en memoria por wa_id
-# (simple, para evitar repetir preguntas)
-# En producción lo ideal es Redis/DB.
+# En producción lo ideal es Redis/DB. Por ahora sirve.
 # -------------------------
 LEADS = {}  # wa_id -> dict
 
@@ -119,6 +135,7 @@ def get_lead(wa_id: str) -> dict:
             "name": None,
             "city": None,
             "last_intent": None,
+            "email_sent": False,  # <- para NO enviar emails repetidos
         }
     return LEADS[wa_id]
 
@@ -138,6 +155,43 @@ def lead_log(lead: dict, reason: str = ""):
     )
 
 
+def send_lead_email(lead: dict, last_user_message: str = ""):
+    """
+    Envía un email cuando hay un lead (teléfono/email) y el usuario pidió humano/cotización.
+    """
+    if not (LEAD_NOTIFY_EMAIL and SMTP_HOST and SMTP_USER and SMTP_PASS):
+        print("⚠️ Email no configurado: faltan variables SMTP/LEAD_NOTIFY_EMAIL")
+        return
+
+    subject = f"Nuevo lead WhatsApp - {lead.get('wa_id')}"
+    body = (
+        "Nuevo lead capturado desde WhatsApp\n\n"
+        f"wa_id: {lead.get('wa_id')}\n"
+        f"Teléfono: {lead.get('phone')}\n"
+        f"Email: {lead.get('email')}\n"
+        f"Nombre: {lead.get('name')}\n"
+        f"Ciudad: {lead.get('city')}\n"
+        f"Human requested: {lead.get('human_requested')}\n"
+        f"Último mensaje del cliente: {last_user_message}\n"
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = SMTP_USER
+    msg["To"] = LEAD_NOTIFY_EMAIL
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+        print("📧 Lead enviado por email a:", LEAD_NOTIFY_EMAIL)
+    except Exception as e:
+        print("❌ Error enviando email:", str(e))
+
+
 async def ask_openai(user_text: str, lead: dict) -> str:
     if not OPENAI_API_KEY:
         return "⚠️ OpenAI no está configurado (falta OPENAI_API_KEY)."
@@ -145,13 +199,12 @@ async def ask_openai(user_text: str, lead: dict) -> str:
     url = "https://api.openai.com/v1/chat/completions"
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
 
-    # Extra: “Contexto interno” para que el modelo no repita preguntas
     internal_context = (
         f"Contexto interno (no lo muestres): wa_id={lead.get('wa_id')}, "
         f"phone={lead.get('phone')}, email={lead.get('email')}, "
         f"human_requested={lead.get('human_requested')}, "
-        f"click_to_call={CLICK_TO_CALL or 'NO_DISPONIBLE'}."
-        "\nRegla: si phone/email ya existen, NO los vuelvas a pedir; solo confirma y avanza."
+        f"click_to_call={CLICK_TO_CALL or 'NO_DISPONIBLE'}.\n"
+        "Regla: si phone/email ya existen, NO los vuelvas a pedir; solo confirma y avanza."
     )
 
     payload = {
@@ -187,7 +240,6 @@ def build_handoff_message(lead: dict) -> str:
         parts.append("En breve un asesor se comunicará contigo. ¿En qué ciudad estás?")
         return "\n".join(parts)
 
-    # Si no hay datos aún, pedimos
     msg = (
         "Perfecto ✅ Un asesor puede ayudarte.\n"
         "Por favor compárteme:\n"
@@ -230,7 +282,7 @@ async def receive_webhook(request: Request):
         text_in = (msg.get("text", {}) or {}).get("body", "") or ""
         print(f"👤 From wa_id={from_number} text={text_in!r}")
 
-        # 1) Capturar datos si vienen en el mensaje
+        # 1) Capturar teléfono/email si vienen en el mensaje
         phone, email = extract_phone_email(text_in)
         if phone and not lead.get("phone"):
             lead["phone"] = phone
@@ -242,20 +294,27 @@ async def receive_webhook(request: Request):
             lead["human_requested"] = True
             lead["last_intent"] = "human"
             lead_log(lead, reason="user_requested_human")
+
+            # Si ya hay datos y aún no se envió email, lo enviamos
+            lead_ready = (lead.get("phone") or lead.get("email"))
+            if lead_ready and not lead.get("email_sent"):
+                send_lead_email(lead, last_user_message=text_in)
+                lead["email_sent"] = True
+
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
 
-        # 3) Si ya está en modo humano y manda datos → agradecer y no repetir
-        if lead.get("human_requested") and (phone or email):
-            lead_log(lead, reason="lead_data_received_after_handoff")
-            reply = build_handoff_message(lead)
-            await send_whatsapp_text(from_number, reply)
-            return {"status": "ok"}
-
-        # 4) Si detecta intención de precio: pedir datos mínimos (sin inventar)
+        # 3) Si detecta intención de precio/cotización: pedir datos mínimos y marcar intención
         if is_price_intent(text_in):
             lead["last_intent"] = "price"
             lead_log(lead, reason="price_intent")
+
+            # Si ya hay datos y aún no se envió email, lo enviamos
+            lead_ready = (lead.get("phone") or lead.get("email"))
+            if lead_ready and not lead.get("email_sent"):
+                send_lead_email(lead, last_user_message=text_in)
+                lead["email_sent"] = True
+
             reply = (
                 "Claro ✅ Para cotizar correctamente necesito 3 datos:\n"
                 "• Modelo exacto (o qué estás buscando)\n"
@@ -268,6 +327,17 @@ async def receive_webhook(request: Request):
             await send_whatsapp_text(from_number, reply)
             return {"status": "ok"}
 
+        # 4) Si ya está en modo humano y manda datos → agradecer, enviar email (una sola vez) y no repetir
+        if lead.get("human_requested") and (phone or email):
+            lead_log(lead, reason="lead_data_received_after_handoff")
+
+            if not lead.get("email_sent"):
+                send_lead_email(lead, last_user_message=text_in)
+                lead["email_sent"] = True
+
+            await send_whatsapp_text(from_number, build_handoff_message(lead))
+            return {"status": "ok"}
+
         # 5) Respuesta normal con OpenAI
         reply = await ask_openai(text_in, lead)
         await send_whatsapp_text(from_number, reply)
@@ -276,3 +346,4 @@ async def receive_webhook(request: Request):
         print("❌ Error:", str(e))
 
     return {"status": "ok"}
+
