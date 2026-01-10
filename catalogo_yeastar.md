@@ -1,5 +1,16 @@
 # Catálogo Yeastar – Nuxway Technology SRL
 
+## IMPORTANTE – LECTURA OBLIGATORIA PARA LA IA
+
+Los valores de usuarios y llamadas simultáneas deben diferenciarse SIEMPRE por tipo de plataforma.
+NO mezclar capacidades entre equipos físicos (Appliance), Software o Cloud.
+
+Regla crítica:
+Los modelos físicos **P520, P550, P560, P570, S412, S20 y S50** NUNCA deben usar valores de Software o Cloud
+(como 1000+ usuarios o cientos de llamadas simultáneas).
+
+---
+
 ## 1) Yeastar P-Series Phone System
 Plataforma de Comunicaciones Unificadas que integra PBX IP, call center, mensajería omnicanal, videollamadas e integraciones empresariales.
 
@@ -9,10 +20,10 @@ Plataforma de Comunicaciones Unificadas que integra PBX IP, call center, mensaje
 - Cloud Edition (UCaaS)
 
 ### Capacidades – Appliance Edition
-- P520: 20 usuarios / 10 llamadas simultáneas
-- P550: 50 usuarios / 25 llamadas simultáneas
-- P560: 100 o 200 usuarios / 30 o 60 llamadas simultáneas
-- P570: 300 / 400 / 500 usuarios / 60 / 90 / 120 llamadas simultáneas
+- **P520:** 20 usuarios / 10 llamadas simultáneas
+- **P550:** 50 usuarios / 25 llamadas simultáneas
+- **P560:** 100 usuarios (base) o 200 usuarios (licencia) / 30 o 60 llamadas simultáneas
+- **P570:** 300 / 400 / 500 usuarios / 60 / 90 / 120 llamadas simultáneas
 
 Soporte adicional según modelo:
 - FXS / FXO / BRI
@@ -34,7 +45,7 @@ Soporte adicional según modelo:
 - Gestión centralizada para MSP y partners
 
 ### Licenciamiento P-Series
-Las licencias aplican para Appliance, Software y Cloud.
+Las licencias aplican para Appliance, Software y Cloud y habilitan funciones y escalabilidad dentro del límite de cada plataforma.
 
 #### Plan Standard
 - Telefonía IP completa
@@ -65,12 +76,12 @@ Notas:
 ---
 
 ## 2) Yeastar S-Series VoIP PBX
-PBX IP clásica para pequeñas y medianas empresas.
+PBX IP clásica para pequeñas y medianas empresas (equipos físicos).
 
 ### Capacidades por modelo
-- S412: 20 usuarios / 8 llamadas / hasta 12 FXS / 4 FXO/BRI / 2 GSM / 4 trunks VoIP
-- S20: 20 usuarios / 10 llamadas / hasta 4 FXS / 4 FXO/BRI / 1 GSM / 20 trunks VoIP
-- S50: 50 usuarios / 25 llamadas / hasta 8 FXS / 8 FXO/BRI / 4 GSM / 50 trunks VoIP
+- **S412:** 20 usuarios / 8 llamadas simultáneas / hasta 12 FXS / 4 FXO o BRI / 2 GSM / 4 trunks VoIP
+- **S20:** 20 usuarios / 10 llamadas simultáneas / hasta 4 FXS / 4 FXO o BRI / 1 GSM / 20 trunks VoIP
+- **S50:** 50 usuarios / 25 llamadas simultáneas / hasta 8 FXS / 8 FXO o BRI / 4 GSM / 50 trunks VoIP
 
 Recomendación:
 - Para más de 50 usuarios o funciones avanzadas → usar P-Series
@@ -111,10 +122,10 @@ Compatibilidad:
 - Funciones de telefonía completas
 
 ### TG Series – 4G LTE VoIP Gateway
-- TG200: 2 canales
-- TG400: 4 canales
-- TG800: 8 canales
-- TG1600: 16 canales
+- **TG200:** 2 canales
+- **TG400:** 4 canales
+- **TG800:** 8 canales
+- **TG1600:** 16 canales
 
 Funciones:
 - SIP / IAX2
@@ -126,9 +137,10 @@ Funciones:
 ---
 
 ## 5) Guía rápida de selección
-- P-Series: UC completa y escalabilidad
-- S-Series: PBX VoIP PyME
-- TE: PRI/E1 hacia SIP
-- TA: Analógico hacia VoIP
-- TG: Canales móviles 4G
-- Linkus: Softphone y UC para usuarios
+- **P-Series:** Comunicaciones Unificadas y escalabilidad
+- **S-Series:** PBX VoIP para PyME
+- **TE:** PRI/E1 hacia SIP
+- **TA:** Analógico hacia VoIP
+- **TG:** Canales móviles 4G
+- **Linkus:** Softphone y UC para usuarios
+
