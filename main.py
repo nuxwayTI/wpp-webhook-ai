@@ -28,6 +28,12 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "Eres un asistente útil. Responde en
 CLICK_TO_CALL = os.getenv("CLICK_TO_CALL", "")
 
 # -------------------------
+# ENV - Webs (nuevo)
+# -------------------------
+NUXWAY_WEB = os.getenv("NUXWAY_WEB", "https://nuxway.net")
+NUXWAY_SERVICES_WEB = os.getenv("NUXWAY_SERVICES_WEB", "https://nuxway.services")
+
+# -------------------------
 # CONTACTO OFICIAL (REAL)
 # -------------------------
 NUXWAY_PHONE_MOBILE = "(+591) 617 86583"
@@ -42,7 +48,7 @@ EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 
 HUMAN_KEYWORDS = [
     "humano", "asesor", "agente", "persona", "vendedor", "ventas",
-    "llamar", "llamada", "contactar", "quiero hablar", "quiero comunicarme"
+    "quiero hablar", "quiero comunicarme", "quiero un asesor", "hablar con alguien"
 ]
 
 PRICE_KEYWORDS = [
@@ -56,7 +62,6 @@ CLICK_LINK_KEYWORDS = [
 
 # -------------------------
 # Estado en memoria por wa_id
-# (se pierde si Render reinicia; luego lo llevamos a Sheets/DB)
 # -------------------------
 LEADS = {}  # wa_id -> dict
 
@@ -66,7 +71,6 @@ def health():
     return {"status": "ok"}
 
 
-# 1) Verificación Webhook Meta
 @app.get("/webhook")
 def verify_webhook(request: Request):
     params = request.query_params
@@ -80,7 +84,6 @@ def verify_webhook(request: Request):
     return PlainTextResponse("Forbidden", status_code=403)
 
 
-# Enviar mensaje WhatsApp
 async def send_whatsapp_text(to: str, text: str):
     if not (WPP_TOKEN and PHONE_NUMBER_ID):
         print("⚠️ Faltan WHATSAPP_TOKEN o WHATSAPP_PHONE_NUMBER_ID")
@@ -160,41 +163,40 @@ def lead_log(lead: dict, reason: str = ""):
     )
 
 
-def contact_block() -> str:
-    return (
-        "📞 Contacto Nuxway:\n"
+def contact_pack() -> str:
+    parts = []
+    if CLICK_TO_CALL:
+        parts.append(f"📲 Click to Call (hablar con asesor):\n{CLICK_TO_CALL}")
+    parts.append(
+        "📞 Teléfonos:\n"
         f"• Móvil: {NUXWAY_PHONE_MOBILE}\n"
         f"• Fijo: {NUXWAY_PHONE_LANDLINE}\n"
         f"📧 Email: {NUXWAY_EMAIL_SALES}"
     )
-
-
-def click_to_call_block() -> str:
-    if CLICK_TO_CALL:
-        return f"📲 Llamada con asesor (Click to Call):\n{CLICK_TO_CALL}"
-    return "📲 Click to Call: (no configurado en este momento)"
+    parts.append(
+        "🌐 Web:\n"
+        f"• {NUXWAY_WEB}\n"
+        f"• {NUXWAY_SERVICES_WEB}"
+    )
+    return "\n\n".join(parts)
 
 
 def build_handoff_message(lead: dict) -> str:
     if lead.get("phone") or lead.get("email"):
-        parts = ["Perfecto ✅ Ya tengo tus datos."]
-        if CLICK_TO_CALL:
-            parts.append(click_to_call_block())
-        parts.append(contact_block())
-        parts.append("En breve un asesor se comunicará contigo. ¿En qué ciudad estás?")
-        return "\n\n".join(parts)
+        return (
+            "Perfecto ✅ Ya tengo tus datos.\n\n"
+            f"{contact_pack()}\n\n"
+            "En breve un asesor se comunicará contigo. ¿En qué ciudad estás?"
+        )
 
-    msg = (
+    return (
         "Perfecto ✅ Un asesor puede ayudarte.\n"
         "Por favor compárteme:\n"
         "• Nombre\n"
         "• Ciudad\n"
-        "• Teléfono o email\n"
+        "• Teléfono o email\n\n"
+        f"{contact_pack()}"
     )
-    if CLICK_TO_CALL:
-        msg += f"\n{click_to_call_block()}\n"
-    msg += f"\n{contact_block()}"
-    return msg
 
 
 async def ask_openai(user_text: str, lead: dict) -> str:
@@ -220,7 +222,6 @@ async def ask_openai(user_text: str, lead: dict) -> str:
         "temperature": 0.3,
     }
 
-    print("🤖 OpenAI input:", user_text)
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(url, headers=headers, json=payload)
 
@@ -230,7 +231,6 @@ async def ask_openai(user_text: str, lead: dict) -> str:
 
     data = r.json()
     out = (data["choices"][0]["message"]["content"] or "").strip()
-    print("🤖 OpenAI output:", out[:400])
     return out or "¿Me das un poco más de detalle?"
 
 
@@ -249,7 +249,7 @@ async def receive_webhook(request: Request):
             return {"status": "ok"}
 
         msg = messages[0]
-        from_number = msg.get("from")  # wa_id del cliente
+        from_number = msg.get("from")
         msg_type = msg.get("type")
 
         if not from_number:
@@ -264,31 +264,21 @@ async def receive_webhook(request: Request):
         text_in = (msg.get("text", {}) or {}).get("body", "") or ""
         print(f"👤 From wa_id={from_number} text={text_in!r}")
 
-        # 1) Capturar teléfono/email si vienen en el mensaje
         phone, email = extract_phone_email(text_in)
         if phone and not lead.get("phone"):
             lead["phone"] = phone
         if email and not lead.get("email"):
             lead["email"] = email
 
-        # 2) Si pregunta por Click-to-Call / link de llamada -> entregar link directo (NO explicación)
+        # Si pide click-to-call/link/llamada -> dar paquete completo
         if wants_click_to_call(text_in):
-            reply = ""
-            if CLICK_TO_CALL:
-                reply = (
-                    "Sí ✅ Aquí tienes el enlace de Click to Call para hablar con un asesor:\n"
-                    f"{CLICK_TO_CALL}\n\n"
-                    f"{contact_block()}"
-                )
-            else:
-                reply = (
-                    "Sí ✅ Tenemos Click to Call, pero ahora mismo no tengo el enlace configurado.\n\n"
-                    f"{contact_block()}"
-                )
-            await send_whatsapp_text(from_number, reply)
+            await send_whatsapp_text(
+                from_number,
+                "Claro ✅ Aquí tienes las opciones para comunicarte con un asesor:\n\n" + contact_pack()
+            )
             return {"status": "ok"}
 
-        # 3) Si pide humano/asesor
+        # Si pide humano -> dar paquete completo
         if wants_human(text_in):
             lead["human_requested"] = True
             lead["last_intent"] = "human"
@@ -296,13 +286,13 @@ async def receive_webhook(request: Request):
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
 
-        # 4) Si ya está en modo humano y manda datos
+        # Si ya está en modo humano y manda datos -> confirmar y paquete completo
         if lead.get("human_requested") and (phone or email):
             lead_log(lead, reason="lead_data_received_after_handoff")
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
 
-        # 5) Si pide precio/cotización: pedir datos mínimos y ofrecer contacto + click-to-call
+        # Si pide precio -> pedir datos + paquete completo
         if is_price_intent(text_in):
             lead["last_intent"] = "price"
             lead_log(lead, reason="price_intent")
@@ -311,15 +301,13 @@ async def receive_webhook(request: Request):
                 "• Modelo exacto (o qué estás buscando)\n"
                 "• Cantidad de usuarios/extensiones (o capacidad)\n"
                 "• Ciudad (para instalación/envío)\n\n"
-                "Si deseas, también puedes dejar tu email y te envío la proforma."
+                "Si deseas, también puedes dejar tu email y te envío la proforma.\n\n"
+                f"{contact_pack()}"
             )
-            if CLICK_TO_CALL:
-                reply += f"\n\n{click_to_call_block()}"
-            reply += f"\n\n{contact_block()}"
             await send_whatsapp_text(from_number, reply)
             return {"status": "ok"}
 
-        # 6) Respuesta normal con OpenAI
+        # Respuesta normal con OpenAI
         reply = await ask_openai(text_in, lead)
         await send_whatsapp_text(from_number, reply)
 
@@ -327,4 +315,5 @@ async def receive_webhook(request: Request):
         print("❌ Error:", str(e))
 
     return {"status": "ok"}
+
 
