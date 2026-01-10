@@ -28,7 +28,7 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "Eres un asistente útil. Responde en
 CLICK_TO_CALL = os.getenv("CLICK_TO_CALL", "")
 
 # -------------------------
-# CONTACTO OFICIAL (FIJO EN CÓDIGO, REAL)
+# CONTACTO OFICIAL (REAL)
 # -------------------------
 NUXWAY_PHONE_MOBILE = "(+591) 617 86583"
 NUXWAY_PHONE_LANDLINE = "(+591) 4 483862"
@@ -46,12 +46,17 @@ HUMAN_KEYWORDS = [
 ]
 
 PRICE_KEYWORDS = [
-    "precio", "costo", "cuanto cuesta", "cotización", "cotizacion", "proforma"
+    "precio", "costo", "cuanto cuesta", "cuánto cuesta", "cotización", "cotizacion", "proforma"
+]
+
+CLICK_LINK_KEYWORDS = [
+    "click to call", "clicktocall", "call link", "calllink",
+    "enlace", "link", "url", "llamar", "llamada", "llamada directa", "botón", "boton"
 ]
 
 # -------------------------
 # Estado en memoria por wa_id
-# (OJO: se pierde si Render reinicia. Luego lo pasamos a Sheets/DB)
+# (se pierde si Render reinicia; luego lo llevamos a Sheets/DB)
 # -------------------------
 LEADS = {}  # wa_id -> dict
 
@@ -105,6 +110,11 @@ def is_price_intent(text: str) -> bool:
     return any(k in t for k in PRICE_KEYWORDS)
 
 
+def wants_click_to_call(text: str) -> bool:
+    t = (text or "").lower()
+    return any(k in t for k in CLICK_LINK_KEYWORDS)
+
+
 def extract_phone_email(text: str):
     phone = None
     email = None
@@ -151,7 +161,6 @@ def lead_log(lead: dict, reason: str = ""):
 
 
 def contact_block() -> str:
-    # Bloque estándar de contacto real
     return (
         "📞 Contacto Nuxway:\n"
         f"• Móvil: {NUXWAY_PHONE_MOBILE}\n"
@@ -160,12 +169,17 @@ def contact_block() -> str:
     )
 
 
+def click_to_call_block() -> str:
+    if CLICK_TO_CALL:
+        return f"📲 Llamada con asesor (Click to Call):\n{CLICK_TO_CALL}"
+    return "📲 Click to Call: (no configurado en este momento)"
+
+
 def build_handoff_message(lead: dict) -> str:
-    # Mensaje cuando piden humano/asesor
     if lead.get("phone") or lead.get("email"):
         parts = ["Perfecto ✅ Ya tengo tus datos."]
         if CLICK_TO_CALL:
-            parts.append(f"📲 Llamada con asesor (Click to Call):\n{CLICK_TO_CALL}")
+            parts.append(click_to_call_block())
         parts.append(contact_block())
         parts.append("En breve un asesor se comunicará contigo. ¿En qué ciudad estás?")
         return "\n\n".join(parts)
@@ -178,7 +192,7 @@ def build_handoff_message(lead: dict) -> str:
         "• Teléfono o email\n"
     )
     if CLICK_TO_CALL:
-        msg += f"\n📲 Llamada con asesor (Click to Call):\n{CLICK_TO_CALL}\n"
+        msg += f"\n{click_to_call_block()}\n"
     msg += f"\n{contact_block()}"
     return msg
 
@@ -250,14 +264,31 @@ async def receive_webhook(request: Request):
         text_in = (msg.get("text", {}) or {}).get("body", "") or ""
         print(f"👤 From wa_id={from_number} text={text_in!r}")
 
-        # Capturar teléfono/email si vienen en el mensaje
+        # 1) Capturar teléfono/email si vienen en el mensaje
         phone, email = extract_phone_email(text_in)
         if phone and not lead.get("phone"):
             lead["phone"] = phone
         if email and not lead.get("email"):
             lead["email"] = email
 
-        # Si pide humano/asesor
+        # 2) Si pregunta por Click-to-Call / link de llamada -> entregar link directo (NO explicación)
+        if wants_click_to_call(text_in):
+            reply = ""
+            if CLICK_TO_CALL:
+                reply = (
+                    "Sí ✅ Aquí tienes el enlace de Click to Call para hablar con un asesor:\n"
+                    f"{CLICK_TO_CALL}\n\n"
+                    f"{contact_block()}"
+                )
+            else:
+                reply = (
+                    "Sí ✅ Tenemos Click to Call, pero ahora mismo no tengo el enlace configurado.\n\n"
+                    f"{contact_block()}"
+                )
+            await send_whatsapp_text(from_number, reply)
+            return {"status": "ok"}
+
+        # 3) Si pide humano/asesor
         if wants_human(text_in):
             lead["human_requested"] = True
             lead["last_intent"] = "human"
@@ -265,13 +296,13 @@ async def receive_webhook(request: Request):
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
 
-        # Si ya está en modo humano y manda datos
+        # 4) Si ya está en modo humano y manda datos
         if lead.get("human_requested") and (phone or email):
             lead_log(lead, reason="lead_data_received_after_handoff")
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
 
-        # Si pide precio/cotización: pedir datos mínimos y ofrecer contacto
+        # 5) Si pide precio/cotización: pedir datos mínimos y ofrecer contacto + click-to-call
         if is_price_intent(text_in):
             lead["last_intent"] = "price"
             lead_log(lead, reason="price_intent")
@@ -283,12 +314,12 @@ async def receive_webhook(request: Request):
                 "Si deseas, también puedes dejar tu email y te envío la proforma."
             )
             if CLICK_TO_CALL:
-                reply += f"\n\n📲 Llamada con asesor (Click to Call):\n{CLICK_TO_CALL}"
+                reply += f"\n\n{click_to_call_block()}"
             reply += f"\n\n{contact_block()}"
             await send_whatsapp_text(from_number, reply)
             return {"status": "ok"}
 
-        # Respuesta normal con OpenAI
+        # 6) Respuesta normal con OpenAI
         reply = await ask_openai(text_in, lead)
         await send_whatsapp_text(from_number, reply)
 
