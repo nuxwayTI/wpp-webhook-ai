@@ -5,6 +5,57 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 
+# --- Capacidad determinística Yeastar (Appliance / S-Series físicos) ---
+YEASTAR_APPLIANCE_CAPACITY = {
+    "P520": {"usuarios": "20", "llamadas": "10"},
+    "P550": {"usuarios": "50", "llamadas": "25"},
+    "P560": {"usuarios": "100 (base) o 200 (licencia)", "llamadas": "30 o 60"},
+    "P570": {"usuarios": "300 / 400 / 500", "llamadas": "60 / 90 / 120"},
+}
+
+YEASTAR_S_CAPACITY = {
+    "S412": {"usuarios": "20", "llamadas": "8"},
+    "S20": {"usuarios": "20", "llamadas": "10"},
+    "S50": {"usuarios": "50", "llamadas": "25"},
+}
+
+def normalize_model(text: str):
+    t = (text or "").upper()
+    # detecta modelos
+    for m in ["P520","P550","P560","P570","S412","S20","S50"]:
+        if m in t:
+            return m
+    return None
+
+def is_capacity_question(text: str) -> bool:
+    t = (text or "").lower()
+    keywords = [
+        "cuanto", "cuánt", "usuarios", "extensiones", "internos",
+        "llamadas", "simult", "capacidad", "soporta"
+    ]
+    return any(k in t for k in keywords)
+
+def build_capacity_reply(model: str) -> str:
+    if model in YEASTAR_APPLIANCE_CAPACITY:
+        cap = YEASTAR_APPLIANCE_CAPACITY[model]
+        return (
+            f"✅ Yeastar {model} (Appliance / equipo físico)\n"
+            f"• Usuarios/extensiones: {cap['usuarios']}\n"
+            f"• Llamadas simultáneas: {cap['llamadas']}\n\n"
+            "Si me dices cuántas extensiones y cuántas llamadas simultáneas necesitas, "
+            "te recomiendo la configuración ideal y te preparo cotización."
+        )
+    if model in YEASTAR_S_CAPACITY:
+        cap = YEASTAR_S_CAPACITY[model]
+        return (
+            f"✅ Yeastar {model} (S-Series / equipo físico)\n"
+            f"• Usuarios: {cap['usuarios']}\n"
+            f"• Llamadas simultáneas: {cap['llamadas']}\n\n"
+            "¿Cuántas extensiones y llamadas simultáneas necesitas? Así te recomiendo el modelo correcto."
+        )
+    return ""
+
+
 app = FastAPI()
 
 # -------------------------
