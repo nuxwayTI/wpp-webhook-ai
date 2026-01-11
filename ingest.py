@@ -9,8 +9,6 @@ OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 
 DEFAULT_URLS = [
     "https://www.nuxway.net/",
-    "https://www.nuxway.net/soluciones",
-    # "https://www.nuxway.net/productos",  # bloquea por 429, luego lo vemos
     "https://nuxway.services/",
 ]
 
