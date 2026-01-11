@@ -8,11 +8,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 
 DEFAULT_URLS = [
-    "https://nuxway.net/",
-    "https://nuxway.net/soluciones",
-    "https://nuxway.net/productos",
+    "https://www.nuxway.net/",
+    "https://www.nuxway.net/soluciones",
+    # "https://www.nuxway.net/productos",  # bloquea por 429, luego lo vemos
     "https://nuxway.services/",
 ]
+
 
 CATALOG_FILES = [
     "catalogo_yeastar.md"
@@ -35,9 +36,10 @@ def chunk_text(text, size=1200, overlap=200):
     return chunks
 
 async def fetch_url(client, url):
-    r = await client.get(url, timeout=30)
+    r = await client.get(url, timeout=30, follow_redirects=True)
     r.raise_for_status()
     return r.text
+
 
 async def embed(texts):
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
