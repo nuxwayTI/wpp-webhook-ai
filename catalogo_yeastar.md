@@ -9,8 +9,6 @@ Regla crítica:
 Los modelos físicos **P520, P550, P560, P570, S412, S20 y S50** NUNCA deben usar valores de Software o Cloud
 (como 1000+ usuarios o cientos de llamadas simultáneas).
 
----
-
 ## 1) Yeastar P-Series Phone System
 Plataforma de Comunicaciones Unificadas que integra PBX IP, call center, mensajería omnicanal, videollamadas e integraciones empresariales.
 
@@ -73,7 +71,6 @@ Notas:
 - API: no compatible con P520
 - La PBX no es PoE (requiere alimentación AC/DC)
 
----
 
 ## 2) Yeastar S-Series VoIP PBX
 PBX IP clásica para pequeñas y medianas empresas (equipos físicos).
@@ -85,8 +82,6 @@ PBX IP clásica para pequeñas y medianas empresas (equipos físicos).
 
 Recomendación:
 - Para más de 50 usuarios o funciones avanzadas → usar P-Series
-
----
 
 ## 3) Yeastar Linkus – Softphone / UC Client
 Aplicación de Comunicaciones Unificadas (Web, Windows, macOS, iOS, Android).
@@ -103,8 +98,6 @@ Compatibilidad:
 - Windows 7+, macOS 10.11+
 - iOS 11+, Android 8+
 - Navegadores Chrome / Edge
-
----
 
 ## 4) Gateways Yeastar
 
@@ -134,8 +127,6 @@ Funciones:
 - APIs abiertas
 - OpenVPN, VLAN, QoS
 
----
-
 ## 5) Guía rápida de selección
 - **P-Series:** Comunicaciones Unificadas y escalabilidad
 - **S-Series:** PBX VoIP para PyME
@@ -143,4 +134,15 @@ Funciones:
 - **TA:** Analógico hacia VoIP
 - **TG:** Canales móviles 4G
 - **Linkus:** Softphone y UC para usuarios
+
+  ## 6) Modelos fuera de venta (EOS)
+⚠️ Los siguientes modelos están en estado EOS (End of Sale) y no se comercializan actualmente en nuestro portafolio:
+
+- **Yeastar S100**: EOS (End of Sale)
+- **Yeastar S300**: EOS (End of Sale)
+
+✅ Alternativas actuales recomendadas:
+- **Yeastar P-Series (Appliance/Software/Cloud)**: P520/ P550 / P560 / P570 (según usuarios y llamadas simultáneas)
+- **S-Series vigente**: S20 / S50 (para escenarios pequeños/medianos dentro de su capacidad)
+
 
