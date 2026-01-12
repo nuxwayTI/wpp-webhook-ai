@@ -37,16 +37,16 @@ NUXWAY_WEB = os.getenv("NUXWAY_WEB", "https://nuxway.net")
 NUXWAY_SERVICES_WEB = os.getenv("NUXWAY_SERVICES_WEB", "https://nuxway.services")
 
 # -------------------------
-# ENV - Zoho Flow Webhook (NUEVO)
-# -------------------------
-ZOHO_FLOW_WEBHOOK_URL = os.getenv("ZOHO_FLOW_WEBHOOK_URL", "")
-
-# -------------------------
 # CONTACTO OFICIAL (REAL)
 # -------------------------
 NUXWAY_PHONE_MOBILE = "(+591) 617 86583"
 NUXWAY_PHONE_LANDLINE = "(+591) 4 483862"
 NUXWAY_EMAIL_SALES = "ventas@nuxway.net"
+
+# -------------------------
+# ENV - Zoho Flow (Webhook)
+# -------------------------
+ZOHO_FLOW_WEBHOOK_URL = os.getenv("ZOHO_FLOW_WEBHOOK_URL", "")
 
 # -------------------------
 # Helpers: regex y keywords
@@ -146,7 +146,6 @@ def rag_search(query_embedding, top_k=6):
 def build_rag_context(results):
     if not results:
         return ""
-    # armamos contexto breve y útil
     lines = ["CONTEXTO TÉCNICO (no inventar; usar esto como fuente):"]
     for r in results:
         src = r.get("source", "")
@@ -154,7 +153,7 @@ def build_rag_context(results):
         if not txt:
             continue
         lines.append(f"- Fuente: {src}\n{txt}")
-    return "\n\n".join(lines)[:12000]  # límite razonable
+    return "\n\n".join(lines)[:12000]
 
 # -------------------------
 # Yeastar determinístico (ANTI-ALUCINACIÓN)
@@ -180,7 +179,6 @@ def find_models(text: str):
     for m in YEASTAR_MODELS:
         if m in t:
             found.append(m)
-    # unique preserving order
     seen = set()
     out = []
     for m in found:
@@ -253,38 +251,6 @@ async def send_whatsapp_text(to: str, text: str):
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.post(url, headers=headers, json=payload)
         print("📤 Send status:", r.status_code, r.text)
-
-# -------------------------
-# Zoho Flow sender (NUEVO)
-# -------------------------
-async def send_lead_to_zoho(lead: dict, note: str = ""):
-    """
-    Envía los datos del lead a Zoho Flow por webhook (JSON).
-    No altera tu flujo: solo reporta el lead.
-    """
-    if not ZOHO_FLOW_WEBHOOK_URL:
-        print("⚠️ Falta ZOHO_FLOW_WEBHOOK_URL, no se envía a Zoho Flow.")
-        return
-
-    payload = {
-        "source": "whatsapp-bot-render",
-        "note": note,
-        "wa_id": lead.get("wa_id"),
-        "name": lead.get("name"),
-        "city": lead.get("city"),
-        "phone": lead.get("phone"),
-        "email": lead.get("email"),
-        "human_requested": lead.get("human_requested"),
-        "last_intent": lead.get("last_intent"),
-        "created_at": lead.get("created_at"),
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.post(ZOHO_FLOW_WEBHOOK_URL, json=payload)
-        print("🟦 Zoho Flow status:", r.status_code, r.text[:300])
-    except Exception as e:
-        print("❌ Error enviando a Zoho Flow:", str(e))
 
 # -------------------------
 # Intent helpers
@@ -378,13 +344,37 @@ def build_handoff_message(lead: dict) -> str:
     )
 
 # -------------------------
+# Zoho Flow sender (Webhook)
+# -------------------------
+async def send_to_zoho_flow(lead: dict):
+    if not ZOHO_FLOW_WEBHOOK_URL:
+        print("⚠️ ZOHO_FLOW_WEBHOOK_URL no configurado")
+        return
+
+    payload = {
+        "source": "whatsapp_bot",
+        "wa_id": lead.get("wa_id"),
+        "name": lead.get("name") or "",
+        "city": lead.get("city") or "",
+        "phone": lead.get("phone") or "",
+        "email": lead.get("email") or "",
+        "intent": lead.get("last_intent") or "human",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(ZOHO_FLOW_WEBHOOK_URL, json=payload)
+            print("🟦 Zoho Flow status:", r.status_code, r.text)
+    except Exception as e:
+        print("❌ Error enviando a Zoho Flow:", str(e))
+
+# -------------------------
 # OpenAI (con RAG)
 # -------------------------
 async def ask_openai(user_text: str, lead: dict) -> str:
     if not OPENAI_API_KEY:
         return "⚠️ OpenAI no está configurado (falta OPENAI_API_KEY)."
 
-    # RAG retrieval
     rag_context = ""
     try:
         q_emb = await embed_query(user_text)
@@ -492,8 +482,9 @@ async def receive_webhook(request: Request):
             lead["last_intent"] = "human"
             lead_log(lead, reason="user_requested_human")
 
-            # --- NUEVO: Enviar lead a Zoho Flow ---
-            await send_lead_to_zoho(lead, note="Usuario pidió asesor/humano")
+            # Enviar a Zoho Flow si ya vino con datos (raro, pero pasa)
+            if lead.get("phone") or lead.get("email"):
+                await send_to_zoho_flow(lead)
 
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
@@ -502,8 +493,8 @@ async def receive_webhook(request: Request):
         if lead.get("human_requested") and (phone or email):
             lead_log(lead, reason="lead_data_received_after_handoff")
 
-            # --- NUEVO: Enviar lead a Zoho Flow ---
-            await send_lead_to_zoho(lead, note="Lead capturado (tel/email) después de handoff")
+            # ✅ NUEVO: Enviar lead a Zoho Flow
+            await send_to_zoho_flow(lead)
 
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
