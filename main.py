@@ -37,6 +37,11 @@ NUXWAY_WEB = os.getenv("NUXWAY_WEB", "https://nuxway.net")
 NUXWAY_SERVICES_WEB = os.getenv("NUXWAY_SERVICES_WEB", "https://nuxway.services")
 
 # -------------------------
+# ENV - Zoho Flow Webhook (NUEVO)
+# -------------------------
+ZOHO_FLOW_WEBHOOK_URL = os.getenv("ZOHO_FLOW_WEBHOOK_URL", "")
+
+# -------------------------
 # CONTACTO OFICIAL (REAL)
 # -------------------------
 NUXWAY_PHONE_MOBILE = "(+591) 617 86583"
@@ -250,6 +255,38 @@ async def send_whatsapp_text(to: str, text: str):
         print("📤 Send status:", r.status_code, r.text)
 
 # -------------------------
+# Zoho Flow sender (NUEVO)
+# -------------------------
+async def send_lead_to_zoho(lead: dict, note: str = ""):
+    """
+    Envía los datos del lead a Zoho Flow por webhook (JSON).
+    No altera tu flujo: solo reporta el lead.
+    """
+    if not ZOHO_FLOW_WEBHOOK_URL:
+        print("⚠️ Falta ZOHO_FLOW_WEBHOOK_URL, no se envía a Zoho Flow.")
+        return
+
+    payload = {
+        "source": "whatsapp-bot-render",
+        "note": note,
+        "wa_id": lead.get("wa_id"),
+        "name": lead.get("name"),
+        "city": lead.get("city"),
+        "phone": lead.get("phone"),
+        "email": lead.get("email"),
+        "human_requested": lead.get("human_requested"),
+        "last_intent": lead.get("last_intent"),
+        "created_at": lead.get("created_at"),
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(ZOHO_FLOW_WEBHOOK_URL, json=payload)
+        print("🟦 Zoho Flow status:", r.status_code, r.text[:300])
+    except Exception as e:
+        print("❌ Error enviando a Zoho Flow:", str(e))
+
+# -------------------------
 # Intent helpers
 # -------------------------
 def wants_human(text: str) -> bool:
@@ -454,12 +491,20 @@ async def receive_webhook(request: Request):
             lead["human_requested"] = True
             lead["last_intent"] = "human"
             lead_log(lead, reason="user_requested_human")
+
+            # --- NUEVO: Enviar lead a Zoho Flow ---
+            await send_lead_to_zoho(lead, note="Usuario pidió asesor/humano")
+
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
 
         # Si ya está en modo humano y manda datos -> confirmar y paquete completo
         if lead.get("human_requested") and (phone or email):
             lead_log(lead, reason="lead_data_received_after_handoff")
+
+            # --- NUEVO: Enviar lead a Zoho Flow ---
+            await send_lead_to_zoho(lead, note="Lead capturado (tel/email) después de handoff")
+
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
 
