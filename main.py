@@ -37,16 +37,18 @@ NUXWAY_WEB = os.getenv("NUXWAY_WEB", "https://nuxway.net")
 NUXWAY_SERVICES_WEB = os.getenv("NUXWAY_SERVICES_WEB", "https://nuxway.services")
 
 # -------------------------
+# ENV - Zoho Flow (Webhook)
+# Pega aquí el webhook URL de Zoho Flow en Render:
+# ZOHO_FLOW_WEBHOOK_URL = https://flow.zoho.com/.../webhook/incoming?zapikey=...
+# -------------------------
+ZOHO_FLOW_WEBHOOK_URL = os.getenv("ZOHO_FLOW_WEBHOOK_URL", "")
+
+# -------------------------
 # CONTACTO OFICIAL (REAL)
 # -------------------------
 NUXWAY_PHONE_MOBILE = "(+591) 617 86583"
 NUXWAY_PHONE_LANDLINE = "(+591) 4 483862"
 NUXWAY_EMAIL_SALES = "ventas@nuxway.net"
-
-# -------------------------
-# ENV - Zoho Flow (Webhook)
-# -------------------------
-ZOHO_FLOW_WEBHOOK_URL = os.getenv("ZOHO_FLOW_WEBHOOK_URL", "")
 
 # -------------------------
 # Helpers: regex y keywords
@@ -253,6 +255,38 @@ async def send_whatsapp_text(to: str, text: str):
         print("📤 Send status:", r.status_code, r.text)
 
 # -------------------------
+# Zoho Flow sender
+# -------------------------
+async def send_to_zoho_flow(lead: dict):
+    """
+    Envía el lead capturado a Zoho Flow (Webhook Trigger).
+    En Zoho Flow mapea estos campos para crear/actualizar contacto en Bigin/Zoho CRM.
+    """
+    if not ZOHO_FLOW_WEBHOOK_URL:
+        print("⚠️ ZOHO_FLOW_WEBHOOK_URL no configurado; no se envía a Zoho.")
+        return
+
+    payload = {
+        "source": "whatsapp-bot-render",
+        "wa_id": lead.get("wa_id"),
+        "name": lead.get("name"),
+        "city": lead.get("city"),
+        "phone": lead.get("phone"),
+        "email": lead.get("email"),
+        "human_requested": bool(lead.get("human_requested")),
+        "last_intent": lead.get("last_intent"),
+        "created_at": lead.get("created_at"),
+        "ts": int(time.time()),
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.post(ZOHO_FLOW_WEBHOOK_URL, json=payload)
+        print("🟦 Zoho Flow status:", r.status_code, r.text)
+    except Exception as e:
+        print("❌ Zoho Flow error:", str(e))
+
+# -------------------------
 # Intent helpers
 # -------------------------
 def wants_human(text: str) -> bool:
@@ -281,6 +315,23 @@ def extract_phone_email(text: str):
 
     return phone, email
 
+# ✅ NUEVO: detección simple de nombre/ciudad desde texto libre
+def extract_name_city(text: str):
+    t = (text or "").strip()
+    city = None
+    m = re.search(r"\bde\s+([A-Za-zÁÉÍÓÚÑáéíóúñ\s]{3,})", t, re.IGNORECASE)
+    if m:
+        city = m.group(1).strip()
+        city = re.sub(r"\s{2,}", " ", city)
+
+    name = None
+    if city:
+        parts = re.split(r"\bde\s+", t, flags=re.IGNORECASE)
+        if parts and parts[0].strip():
+            name = parts[0].strip()
+
+    return name, city
+
 def get_lead(wa_id: str) -> dict:
     if wa_id not in LEADS:
         LEADS[wa_id] = {
@@ -292,6 +343,8 @@ def get_lead(wa_id: str) -> dict:
             "name": None,
             "city": None,
             "last_intent": None,
+            # ✅ NUEVO: para evitar enviar duplicado a Zoho en el mismo runtime
+            "zoho_sent": False,
         }
     return LEADS[wa_id]
 
@@ -305,6 +358,8 @@ def lead_log(lead: dict, reason: str = ""):
             "name": lead.get("name"),
             "city": lead.get("city"),
             "human_requested": lead.get("human_requested"),
+            "last_intent": lead.get("last_intent"),
+            "zoho_sent": lead.get("zoho_sent"),
             "reason": reason,
         }
     )
@@ -342,31 +397,6 @@ def build_handoff_message(lead: dict) -> str:
         "• Teléfono o email\n\n"
         f"{contact_pack()}"
     )
-
-# -------------------------
-# Zoho Flow sender (Webhook)
-# -------------------------
-async def send_to_zoho_flow(lead: dict):
-    if not ZOHO_FLOW_WEBHOOK_URL:
-        print("⚠️ ZOHO_FLOW_WEBHOOK_URL no configurado")
-        return
-
-    payload = {
-        "source": "whatsapp_bot",
-        "wa_id": lead.get("wa_id"),
-        "name": lead.get("name") or "",
-        "city": lead.get("city") or "",
-        "phone": lead.get("phone") or "",
-        "email": lead.get("email") or "",
-        "intent": lead.get("last_intent") or "human",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(ZOHO_FLOW_WEBHOOK_URL, json=payload)
-            print("🟦 Zoho Flow status:", r.status_code, r.text)
-    except Exception as e:
-        print("❌ Error enviando a Zoho Flow:", str(e))
 
 # -------------------------
 # OpenAI (con RAG)
@@ -461,6 +491,20 @@ async def receive_webhook(request: Request):
         if email and not lead.get("email"):
             lead["email"] = email
 
+        # ✅ NUEVO: captura nombre/ciudad desde texto libre
+        name, city = extract_name_city(text_in)
+        if name and not lead.get("name"):
+            lead["name"] = name
+        if city and not lead.get("city"):
+            lead["city"] = city
+
+        # ✅ NUEVO: si el usuario ya dejó datos, mandamos lead a Zoho (aunque no haya pedido asesor)
+        if (lead.get("phone") or lead.get("email")) and not lead.get("zoho_sent"):
+            lead["last_intent"] = lead.get("last_intent") or "lead"
+            lead_log(lead, reason="auto_send_zoho_on_data")
+            await send_to_zoho_flow(lead)
+            lead["zoho_sent"] = True
+
         # --- FIX 1: Capacidades Yeastar (sin IA, multi-model) ---
         models = find_models(text_in)
         if models and is_capacity_question(text_in):
@@ -481,20 +525,24 @@ async def receive_webhook(request: Request):
             lead["human_requested"] = True
             lead["last_intent"] = "human"
             lead_log(lead, reason="user_requested_human")
-
-            # Enviar a Zoho Flow si ya vino con datos (raro, pero pasa)
-            if lead.get("phone") or lead.get("email"):
-                await send_to_zoho_flow(lead)
-
             await send_whatsapp_text(from_number, build_handoff_message(lead))
+
+            # ✅ NUEVO: al pedir humano, si ya hay datos y no se envió aún, enviamos a Zoho
+            if (lead.get("phone") or lead.get("email")) and not lead.get("zoho_sent"):
+                lead_log(lead, reason="send_zoho_on_human_request")
+                await send_to_zoho_flow(lead)
+                lead["zoho_sent"] = True
+
             return {"status": "ok"}
 
         # Si ya está en modo humano y manda datos -> confirmar y paquete completo
         if lead.get("human_requested") and (phone or email):
             lead_log(lead, reason="lead_data_received_after_handoff")
 
-            # ✅ NUEVO: Enviar lead a Zoho Flow
-            await send_to_zoho_flow(lead)
+            # ✅ NUEVO: si entró aquí y aún no mandó Zoho, mandar
+            if not lead.get("zoho_sent"):
+                await send_to_zoho_flow(lead)
+                lead["zoho_sent"] = True
 
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
@@ -522,5 +570,4 @@ async def receive_webhook(request: Request):
         print("❌ Error:", str(e))
 
     return {"status": "ok"}
-
 
