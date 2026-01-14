@@ -80,6 +80,7 @@ CALLBACK_KEYWORDS = [
 # -------------------------
 LEADS = {}  # wa_id -> dict
 
+
 # -------------------------
 # Normalización Bolivia: teléfono a 8 dígitos (para Zoho Bigin)
 # -------------------------
@@ -120,7 +121,6 @@ def is_valid_email(email: Optional[str]) -> bool:
 
 def clean_full_name(s: str) -> str:
     t = (s or "").strip()
-    # Quita muletillas comunes
     t = re.sub(r"(?i)\b(hola|buenas|buenos días|buenos dias|buen dia|soy|me llamo|mi nombre es)\b[:,]?\s*", "", t).strip()
     t = re.sub(r"\s{2,}", " ", t)
     return t
@@ -129,14 +129,68 @@ def split_first_last(full_name: str) -> Tuple[Optional[str], str]:
     t = clean_full_name(full_name)
     if not t:
         return None, "SinApellido"
-
     parts = [p for p in t.split(" ") if p]
     if len(parts) == 1:
         return parts[0], "SinApellido"
-
     last = parts[-1]
     first = " ".join(parts[:-1])
     return first, last
+
+
+# -------------------------
+# Empresa: extracción simple desde texto
+# -------------------------
+def extract_company(text: str) -> Optional[str]:
+    t = (text or "").strip()
+    if not t:
+        return None
+
+    patterns = [
+        r"(?i)\bmi empresa es\s+(.+)",
+        r"(?i)\bempresa\s*:\s*(.+)",
+        r"(?i)\btrabajo en\s+(.+)",
+        r"(?i)\bsoy de la empresa\s+(.+)",
+        r"(?i)\bmi compañ[ií]a es\s+(.+)",
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, t)
+        if m:
+            company = (m.group(1) or "").strip()
+            company = re.split(r"(?i)(\.|,|\bestoy en\b|\bmi celular\b|\bmi número\b|\bmi correo\b|\bemail\b)", company)[0].strip()
+            company = re.sub(r"\s{2,}", " ", company)
+            if len(company) >= 2:
+                return company
+    return None
+
+
+# -------------------------
+# Comando de prueba: resetear memoria del lead
+# -------------------------
+def is_reset_command(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return t in ("/reset", "reset", "reiniciar", "borrar datos", "resetear")
+
+
+# -------------------------
+# Fingerprint: reenviar a Zoho solo si cambió algo importante
+# -------------------------
+def lead_fingerprint_for_zoho(lead: dict) -> str:
+    data = {
+        "first_name": lead.get("first_name"),
+        "last_name": lead.get("last_name"),
+        "name": lead.get("name"),
+        "email": lead.get("email"),
+        "phone_8": lead.get("phone_8"),
+        "city": lead.get("city"),
+        "company_name": lead.get("company_name"),
+        "human_requested": bool(lead.get("human_requested")),
+        "callback_requested": bool(lead.get("callback_requested")),
+        "notes": lead.get("notes"),
+        "last_intent": lead.get("last_intent"),
+    }
+    return json.dumps(data, sort_keys=True, ensure_ascii=False)
+
 
 # -------------------------
 # RAG store (knowledge_store.json)
@@ -201,11 +255,7 @@ def rag_search(query_embedding, top_k=6):
     out = []
     for score, idx in scored[:top_k]:
         doc = STORE_DOCS[idx]
-        out.append({
-            "score": score,
-            "source": doc.get("source", ""),
-            "text": doc.get("text", "")
-        })
+        out.append({"score": score, "source": doc.get("source", ""), "text": doc.get("text", "")})
     return out
 
 def build_rag_context(results):
@@ -219,6 +269,7 @@ def build_rag_context(results):
             continue
         lines.append(f"- Fuente: {src}\n{txt}")
     return "\n\n".join(lines)[:12000]
+
 
 # -------------------------
 # Yeastar determinístico (ANTI-ALUCINACIÓN)
@@ -236,7 +287,7 @@ YEASTAR_S_CAPACITY = {
     "S50": {"usuarios": "50", "llamadas": "25"},
 }
 
-YEASTAR_MODELS = ["P520","P550","P560","P570","S412","S20","S50"]
+YEASTAR_MODELS = ["P520", "P550", "P560", "P570", "S412", "S20", "S50"]
 
 def find_models(text: str):
     t = (text or "").upper()
@@ -254,10 +305,7 @@ def find_models(text: str):
 
 def is_capacity_question(text: str) -> bool:
     t = (text or "").lower()
-    keywords = [
-        "cuanto", "cuánt", "usuarios", "extensiones", "internos",
-        "llamadas", "simult", "capacidad", "soporta"
-    ]
+    keywords = ["cuanto", "cuánt", "usuarios", "extensiones", "internos", "llamadas", "simult", "capacidad", "soporta"]
     return any(k in t for k in keywords)
 
 def capacity_line_for_model(model: str) -> str:
@@ -277,6 +325,7 @@ def build_capacity_reply_multi(models):
     lines.append("Si me dices cuántas extensiones y cuántas llamadas simultáneas necesitas, te recomiendo la mejor opción y te preparo cotización.")
     return "\n".join(lines)
 
+
 # -------------------------
 # Endpoints base
 # -------------------------
@@ -295,6 +344,7 @@ def verify_webhook(request: Request):
         return PlainTextResponse(challenge, status_code=200)
 
     return PlainTextResponse("Forbidden", status_code=403)
+
 
 # -------------------------
 # WhatsApp sender
@@ -317,20 +367,20 @@ async def send_whatsapp_text(to: str, text: str):
         r = await client.post(url, headers=headers, json=payload)
         print("📤 Send status:", r.status_code, r.text)
 
+
 # -------------------------
 # Zoho Flow sender
 # -------------------------
 async def send_to_zoho_flow(lead: dict):
     """
     Envía el lead capturado a Zoho Flow (Webhook Trigger).
-    En Zoho Flow mapea estos campos para crear/actualizar contacto en Bigin/Zoho CRM.
     """
     if not ZOHO_FLOW_WEBHOOK_URL:
         print("⚠️ ZOHO_FLOW_WEBHOOK_URL no configurado; no se envía a Zoho.")
         return
 
     payload = {
-        # EXISTENTES (no rompen tu Flow actual)
+        # EXISTENTES
         "source": "whatsapp-bot-render",
         "wa_id": lead.get("wa_id"),
         "name": lead.get("name"),
@@ -342,7 +392,7 @@ async def send_to_zoho_flow(lead: dict):
         "created_at": lead.get("created_at"),
         "ts": int(time.time()),
 
-        # NUEVOS (inteligencia)
+        # NUEVOS
         "first_name": lead.get("first_name"),
         "last_name": lead.get("last_name"),
         "phone_8": lead.get("phone_8"),
@@ -350,6 +400,7 @@ async def send_to_zoho_flow(lead: dict):
         "email_valid": bool(lead.get("email_valid")),
         "callback_requested": bool(lead.get("callback_requested")),
         "notes": lead.get("notes"),
+        "company_name": lead.get("company_name"),
     }
 
     try:
@@ -358,6 +409,7 @@ async def send_to_zoho_flow(lead: dict):
         print("🟦 Zoho Flow status:", r.status_code, r.text)
     except Exception as e:
         print("❌ Zoho Flow error:", str(e))
+
 
 # -------------------------
 # Intent helpers
@@ -384,7 +436,6 @@ def extract_phone_email(text: str) -> Tuple[Optional[str], Optional[str]]:
     if m2:
         email = m2.group(1).strip()
 
-    # Busca varios candidatos y toma el primero que normalice a 8 dígitos
     candidates = PHONE_RE.findall(text or "")
     phone8 = None
     for c in candidates:
@@ -395,7 +446,6 @@ def extract_phone_email(text: str) -> Tuple[Optional[str], Optional[str]]:
 
     return phone8, email
 
-# ✅ Mejorado: detección simple de nombre/ciudad desde texto libre
 def extract_name_city(text: str) -> Tuple[Optional[str], Optional[str]]:
     t = (text or "").strip()
     city = None
@@ -419,11 +469,13 @@ def extract_name_city(text: str) -> Tuple[Optional[str], Optional[str]]:
     name = clean_full_name(name or "")
     return (name or None), city
 
+
 def get_lead(wa_id: str) -> dict:
     if wa_id not in LEADS:
         LEADS[wa_id] = {
             "wa_id": wa_id,
             "created_at": int(time.time()),
+
             "human_requested": False,
             "callback_requested": False,
 
@@ -434,17 +486,19 @@ def get_lead(wa_id: str) -> dict:
             "email": None,
             "email_valid": False,
 
-            "name": None,         # full name (texto)
+            "name": None,         # full name raw/limpio
             "first_name": None,
             "last_name": "SinApellido",
 
+            "company_name": None,
             "city": None,
             "notes": None,
 
             "last_intent": None,
 
-            # ✅ para evitar enviar duplicado a Zoho en el mismo runtime
+            # Zoho control
             "zoho_sent": False,
+            "zoho_last_fingerprint": None,
         }
     return LEADS[wa_id]
 
@@ -453,15 +507,15 @@ def lead_log(lead: dict, reason: str = ""):
         "🟩 LEAD:",
         {
             "wa_id": lead.get("wa_id"),
-            "phone": lead.get("phone"),
+            "first_name": lead.get("first_name"),
+            "last_name": lead.get("last_name"),
+            "name": lead.get("name"),
+            "company_name": lead.get("company_name"),
+            "city": lead.get("city"),
             "phone_8": lead.get("phone_8"),
             "phone_valid": lead.get("phone_valid"),
             "email": lead.get("email"),
             "email_valid": lead.get("email_valid"),
-            "name": lead.get("name"),
-            "first_name": lead.get("first_name"),
-            "last_name": lead.get("last_name"),
-            "city": lead.get("city"),
             "human_requested": lead.get("human_requested"),
             "callback_requested": lead.get("callback_requested"),
             "last_intent": lead.get("last_intent"),
@@ -506,19 +560,15 @@ def build_handoff_message(lead: dict) -> str:
 
 def should_send_to_zoho(lead: dict) -> bool:
     """
-    Enviar a Zoho si:
-    - tenemos nombre (porque dijiste que nombre es mínimo)
-    Y además alguno de:
-      - email
-      - phone válido 8 dígitos
-      - pidió humano
-      - pidió callback
-    Así evitamos fallos por teléfono inválido y evitamos ruido.
+    Envía a Zoho si tenemos al menos nombre y alguna razón:
+    - email o phone válido
+    - o pidió humano/callback
     """
     has_name = bool(lead.get("first_name") or lead.get("name"))
     has_contact = bool(lead.get("email")) or bool(lead.get("phone_valid"))
     requested = bool(lead.get("human_requested")) or bool(lead.get("callback_requested"))
     return has_name and (has_contact or requested)
+
 
 # -------------------------
 # OpenAI (con RAG)
@@ -545,7 +595,8 @@ async def ask_openai(user_text: str, lead: dict) -> str:
     internal_context = (
         f"Contexto interno (no lo muestres): wa_id={lead.get('wa_id')}, "
         f"phone_8={lead.get('phone_8')}, phone_valid={lead.get('phone_valid')}, "
-        f"email={lead.get('email')}, human_requested={lead.get('human_requested')}, callback_requested={lead.get('callback_requested')}.\n"
+        f"email={lead.get('email')}, company_name={lead.get('company_name')}, "
+        f"human_requested={lead.get('human_requested')}, callback_requested={lead.get('callback_requested')}.\n"
         "Regla: si phone/email ya existen, NO los vuelvas a pedir; confirma y avanza.\n"
         "Regla: si el usuario pide humano/callback, prioriza capturar nombre y un medio de contacto.\n"
     )
@@ -558,11 +609,7 @@ async def ask_openai(user_text: str, lead: dict) -> str:
         messages.append({"role": "system", "content": rag_context})
     messages.append({"role": "user", "content": user_text})
 
-    payload = {
-        "model": OPENAI_MODEL,
-        "messages": messages,
-        "temperature": 0.2,
-    }
+    payload = {"model": OPENAI_MODEL, "messages": messages, "temperature": 0.2}
 
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(url, headers=headers, json=payload)
@@ -574,6 +621,7 @@ async def ask_openai(user_text: str, lead: dict) -> str:
     data = r.json()
     out = (data["choices"][0]["message"]["content"] or "").strip()
     return out or "¿Me das un poco más de detalle?"
+
 
 # -------------------------
 # Webhook receiver
@@ -608,6 +656,12 @@ async def receive_webhook(request: Request):
         text_in = (msg.get("text", {}) or {}).get("body", "") or ""
         print(f"👤 From wa_id={from_number} text={text_in!r}")
 
+        # ✅ comando de prueba: resetear sin reiniciar Render
+        if is_reset_command(text_in):
+            LEADS.pop(from_number, None)
+            await send_whatsapp_text(from_number, "✅ Listo. Reinicié tus datos de prueba. Envíame nombre/ciudad/teléfono/email nuevamente.")
+            return {"status": "ok"}
+
         # 0) Detecta humano/callback en cualquier momento
         if wants_callback(text_in):
             lead["callback_requested"] = True
@@ -619,6 +673,11 @@ async def receive_webhook(request: Request):
             lead["human_requested"] = True
             lead["last_intent"] = "human"
 
+        # 0.1) Empresa (si la detecta)
+        company = extract_company(text_in)
+        if company and not lead.get("company_name"):
+            lead["company_name"] = company
+
         # 1) Captura teléfono/email y normaliza
         phone8, email = extract_phone_email(text_in)
 
@@ -627,9 +686,7 @@ async def receive_webhook(request: Request):
         lead["email_valid"] = is_valid_email(lead.get("email"))
 
         if phone8 and not lead.get("phone"):
-            # mantenemos compat: lead["phone"] sigue existiendo
-            lead["phone"] = phone8
-
+            lead["phone"] = phone8  # compat
         lead["phone_8"] = normalize_bolivia_phone_8(lead.get("phone") or "")
         lead["phone_valid"] = phone_is_valid_8(lead.get("phone_8"))
 
@@ -640,18 +697,20 @@ async def receive_webhook(request: Request):
         if city and not lead.get("city"):
             lead["city"] = city
 
-        # Asegura first_name/last_name si hay name
         if lead.get("name") and (not lead.get("first_name") or not lead.get("last_name")):
             fn, ln = split_first_last(lead["name"])
             lead["first_name"] = fn
             lead["last_name"] = ln or "SinApellido"
 
-        # 3) Auto-enviar a Zoho si corresponde (sin romper Bigin)
-        if should_send_to_zoho(lead) and not lead.get("zoho_sent"):
-            lead["last_intent"] = lead.get("last_intent") or "lead"
-            lead_log(lead, reason="auto_send_zoho")
-            await send_to_zoho_flow(lead)
-            lead["zoho_sent"] = True
+        # 3) Enviar a Zoho si corresponde, y reenviar si cambió el fingerprint
+        if should_send_to_zoho(lead):
+            fp = lead_fingerprint_for_zoho(lead)
+            if (not lead.get("zoho_sent")) or (fp != lead.get("zoho_last_fingerprint")):
+                lead["last_intent"] = lead.get("last_intent") or "lead"
+                lead_log(lead, reason="send_or_update_zoho_on_change")
+                await send_to_zoho_flow(lead)
+                lead["zoho_sent"] = True
+                lead["zoho_last_fingerprint"] = fp
 
         # --- FIX 1: Capacidades Yeastar (sin IA, multi-model) ---
         models = find_models(text_in)
@@ -672,23 +731,11 @@ async def receive_webhook(request: Request):
         if wants_human(text_in):
             lead_log(lead, reason="user_requested_human")
             await send_whatsapp_text(from_number, build_handoff_message(lead))
-
-            # Si pidió humano y aún no se envió, intenta enviar
-            if should_send_to_zoho(lead) and not lead.get("zoho_sent"):
-                lead_log(lead, reason="send_zoho_on_human_request")
-                await send_to_zoho_flow(lead)
-                lead["zoho_sent"] = True
-
             return {"status": "ok"}
 
         # Si ya está en modo humano y manda datos -> confirmar y paquete completo
-        if lead.get("human_requested") and (phone8 or email or name):
+        if lead.get("human_requested") and (phone8 or email or name or company):
             lead_log(lead, reason="lead_data_received_after_handoff")
-
-            if should_send_to_zoho(lead) and not lead.get("zoho_sent"):
-                await send_to_zoho_flow(lead)
-                lead["zoho_sent"] = True
-
             await send_whatsapp_text(from_number, build_handoff_message(lead))
             return {"status": "ok"}
 
@@ -715,4 +762,5 @@ async def receive_webhook(request: Request):
         print("❌ Error:", str(e))
 
     return {"status": "ok"}
+
 
