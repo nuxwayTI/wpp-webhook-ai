@@ -55,5 +55,3 @@ async def retrieve(query: str, k: int = 5):
             "text": texts[i],
         })
     return results
-
-
