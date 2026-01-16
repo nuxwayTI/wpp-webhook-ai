@@ -670,9 +670,11 @@ async def receive_webhook(request: Request):
             lead["welcomed"] = True
             await send_whatsapp_text(
                 from_number,
-                "¡Hola! Soy el asistente oficial de Nuxway Technology SRL ✅\n"
-                "Te ayudo con telefonía/IP PBX (Yeastar), redes/seguridad o call center.\n"
-                "¿Qué necesitas para tu empresa?"
+                 "¡Hola! Soy el asistente oficial de Nuxway Technology SRL ✅\n"
+                "Te ayudo con soluciones de telefonía/IP PBX (Yeastar), redes, seguridad y call center.\n"
+                "¿Qué estás buscando para tu empresa?\n\n"
+                "Si deseas, déjame tus datos y un asesor se comunicará contigo, "
+                "o puedes contactarnos directamente cuando prefieras."
             )
             return {"status": "ok"}
 
