@@ -496,6 +496,9 @@ def get_lead(wa_id: str) -> dict:
 
             "last_intent": None,
 
+            # ✅ NUEVO: saludo 1 sola vez por wa_id
+            "welcomed": False,
+
             # Zoho control
             "zoho_sent": False,
             "zoho_last_fingerprint": None,
@@ -662,6 +665,17 @@ async def receive_webhook(request: Request):
             await send_whatsapp_text(from_number, "✅ Listo. Reinicié tus datos de prueba. Envíame nombre/ciudad/teléfono/email nuevamente.")
             return {"status": "ok"}
 
+        # ✅ NUEVO: Saludo comercial SOLO 1 vez por contacto
+        if not lead.get("welcomed"):
+            lead["welcomed"] = True
+            await send_whatsapp_text(
+                from_number,
+                "¡Hola! Soy el asistente oficial de Nuxway Technology SRL ✅\n"
+                "Te ayudo con telefonía/IP PBX (Yeastar), redes/seguridad o call center.\n"
+                "¿Qué necesitas para tu empresa?"
+            )
+            return {"status": "ok"}
+
         # 0) Detecta humano/callback en cualquier momento
         if wants_callback(text_in):
             lead["callback_requested"] = True
@@ -762,5 +776,4 @@ async def receive_webhook(request: Request):
         print("❌ Error:", str(e))
 
     return {"status": "ok"}
-
 
