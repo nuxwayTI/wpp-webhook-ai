@@ -371,13 +371,14 @@ async def send_whatsapp_text(to: str, text: str):
 # -------------------------
 # Zoho Flow sender
 # -------------------------
-async def send_to_zoho_flow(lead: dict):
+async def send_to_zoho_flow(lead: dict) -> bool:
     """
     Envía el lead capturado a Zoho Flow (Webhook Trigger).
+    Retorna True si Zoho respondió 2xx.
     """
     if not ZOHO_FLOW_WEBHOOK_URL:
         print("⚠️ ZOHO_FLOW_WEBHOOK_URL no configurado; no se envía a Zoho.")
-        return
+        return False
 
     payload = {
         # EXISTENTES
@@ -407,8 +408,10 @@ async def send_to_zoho_flow(lead: dict):
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.post(ZOHO_FLOW_WEBHOOK_URL, json=payload)
         print("🟦 Zoho Flow status:", r.status_code, r.text)
+        return 200 <= r.status_code < 300
     except Exception as e:
         print("❌ Zoho Flow error:", str(e))
+        return False
 
 
 # -------------------------
@@ -496,8 +499,11 @@ def get_lead(wa_id: str) -> dict:
 
             "last_intent": None,
 
-            # ✅ NUEVO: saludo 1 sola vez por wa_id
+            # saludo 1 sola vez por wa_id
             "welcomed": False,
+
+            # ✅ NUEVO: confirmación de registro Zoho (para no repetir)
+            "zoho_confirmed": False,
 
             # Zoho control
             "zoho_sent": False,
@@ -665,12 +671,12 @@ async def receive_webhook(request: Request):
             await send_whatsapp_text(from_number, "✅ Listo. Reinicié tus datos de prueba. Envíame nombre/ciudad/teléfono/email nuevamente.")
             return {"status": "ok"}
 
-        # ✅ NUEVO: Saludo comercial SOLO 1 vez por contacto
+        # ✅ Saludo comercial SOLO 1 vez por contacto (se mantiene tu lógica)
         if not lead.get("welcomed"):
             lead["welcomed"] = True
             await send_whatsapp_text(
                 from_number,
-                 "¡Hola! Soy el asistente oficial de Nuxway Technology SRL ✅\n"
+                "¡Hola! Soy el asistente oficial de Nuxway Technology SRL ✅\n"
                 "Te ayudo con soluciones de telefonía/IP PBX (Yeastar), redes, seguridad y call center.\n"
                 "¿Qué estás buscando para tu empresa?\n\n"
                 "Si deseas, déjame tus datos y un asesor se comunicará contigo, "
@@ -724,9 +730,20 @@ async def receive_webhook(request: Request):
             if (not lead.get("zoho_sent")) or (fp != lead.get("zoho_last_fingerprint")):
                 lead["last_intent"] = lead.get("last_intent") or "lead"
                 lead_log(lead, reason="send_or_update_zoho_on_change")
-                await send_to_zoho_flow(lead)
+
+                ok = await send_to_zoho_flow(lead)
+
                 lead["zoho_sent"] = True
                 lead["zoho_last_fingerprint"] = fp
+
+                # ✅ NUEVO: confirmación al cliente SOLO una vez, sin mostrar "200 OK"
+                if ok and not lead.get("zoho_confirmed"):
+                    lead["zoho_confirmed"] = True
+                    await send_whatsapp_text(
+                        from_number,
+                        "Perfecto ✅ Ya registré tus datos. En breve un asesor se comunicará contigo.\n\n"
+                        "Si deseas volver a registrarlos, escribe /reset y envíalos nuevamente."
+                    )
 
         # --- FIX 1: Capacidades Yeastar (sin IA, multi-model) ---
         models = find_models(text_in)
@@ -778,4 +795,3 @@ async def receive_webhook(request: Request):
         print("❌ Error:", str(e))
 
     return {"status": "ok"}
-
